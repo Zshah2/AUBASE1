@@ -8,6 +8,7 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 require_once __DIR__ . '/backend/db.php';
+require_once __DIR__ . '/backend/csrf.php';
 
 $name    = (string) ($_SESSION['username'] ?? 'Member');
 $user_id = (string) $_SESSION['user_id'];
@@ -16,6 +17,10 @@ $demo_ref_ts = defined('AUBASE_DEMO_NOW') ? strtotime(AUBASE_DEMO_NOW) : time();
 
 // Withdraw bid
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_bid_id'])) {
+    if (!csrf_verify()) {
+        header('Location: dashboard.php?msg=invalid_session');
+        exit;
+    }
     $bid_id = (int)$_POST['remove_bid_id'];
     $check  = $conn->prepare("SELECT auction_id FROM Bid WHERE bid_id = ? AND bidder_id = ?");
     $check->bind_param('is', $bid_id, $user_id);
@@ -41,6 +46,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_bid_id'])) {
 
 // Delete listing
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_listing_id'])) {
+    if (!csrf_verify()) {
+        header('Location: dashboard.php?msg=invalid_session');
+        exit;
+    }
     $item_id = (int)$_POST['remove_listing_id'];
     $check = $conn->prepare("SELECT item_id FROM Item WHERE item_id = ? AND seller_id = ?");
     $check->bind_param('is', $item_id, $user_id);
@@ -129,7 +138,8 @@ $my_listings = $conn->query("
         .stat-icon.gold{background:var(--gold-light)}.stat-icon.navy{background:var(--sky-wash)}.stat-icon.green{background:var(--green-bg)}
         .stat-num{font-family:'DM Serif Display',serif;font-size:26px;font-weight:400;color:var(--navy);letter-spacing:-1px;line-height:1}
         .stat-label{font-size:11px;color:var(--muted);font-weight:500;letter-spacing:0.04em;text-transform:uppercase;margin-top:2px}
-        .toast{max-width:var(--page-max);margin:16px auto 0;padding:0 var(--edge)}
+        .toast{max-width:var(--page-max);margin:16px auto 0;padding:0 var(--edge);transition:opacity .4s ease,transform .4s ease,margin .4s ease}
+        .toast.toast-hiding{opacity:0;transform:translateY(-6px);margin-top:0;margin-bottom:0;pointer-events:none}
         .toast-inner{background:var(--green-bg);border:1px solid #a7f3d0;color:var(--green);border-radius:var(--radius-sm);padding:11px 16px;font-size:13px;font-weight:500;display:flex;align-items:center;gap:8px}
         .toast-inner.warn{background:var(--red-bg);border-color:#fecaca;color:var(--red)}
         .dash-body{max-width:var(--page-max);margin:clamp(16px,2.5vw,28px) auto clamp(40px,5vw,64px);padding:0 var(--edge);display:grid;grid-template-columns:1fr 1fr;gap:clamp(14px,2vw,22px)}
@@ -163,8 +173,9 @@ $my_listings = $conn->query("
         .modal{background:var(--white);border-radius:18px;padding:28px;max-width:360px;width:90%;box-shadow:0 20px 60px rgba(13,15,20,0.2);text-align:center}
         .modal-icon{font-size:36px;margin-bottom:14px}
         .modal h3{font-family:'DM Serif Display',serif;font-size:20px;font-weight:400;color:var(--ink);margin-bottom:8px}
-        .modal p{font-size:13.5px;color:var(--muted);line-height:1.6;margin-bottom:22px}
-        .modal-item-name{font-weight:600;color:var(--ink);display:block;margin-top:5px;font-size:13px}
+        .modal p{font-size:13.5px;color:var(--muted);line-height:1.6;margin-bottom:10px}
+        .modal-body-text{margin-bottom:8px}
+        .modal-item-name{font-weight:600;color:var(--ink);font-size:14px;margin-bottom:22px;line-height:1.4;word-break:break-word}
         .modal-actions{display:flex;gap:10px;justify-content:center}
         .modal-cancel{padding:10px 22px;border-radius:50px;border:1.5px solid var(--border-2);background:var(--white);color:var(--mid);font-size:13.5px;font-weight:500;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.18s}
         .modal-cancel:hover{color:var(--navy);border-color:var(--navy)}
@@ -233,9 +244,19 @@ $my_listings = $conn->query("
 </div>
 
 <?php if ($msg): ?>
-    <div class="toast">
-        <div class="toast-inner <?= $msg === 'listing_removed' ? 'warn' : '' ?>">
-            <?= $msg === 'bid_removed' ? '✓ Bid withdrawn successfully.' : '✓ Listing removed successfully.' ?>
+    <div class="toast" id="dash-toast" role="status" aria-live="polite">
+        <div class="toast-inner <?= in_array($msg, ['listing_removed', 'invalid_session'], true) ? 'warn' : '' ?>">
+            <?php
+            if ($msg === 'bid_removed') {
+                echo 'Your bid has been removed. The auction price was updated. You cannot restore this bid.';
+            } elseif ($msg === 'listing_removed') {
+                echo 'Your listing has been permanently removed along with its bids. You cannot reclaim it or undo this.';
+            } elseif ($msg === 'invalid_session') {
+                echo 'That action could not be completed. Refresh the page and try again.';
+            } else {
+                echo htmlspecialchars($msg);
+            }
+            ?>
         </div>
     </div>
 <?php endif; ?>
@@ -368,10 +389,12 @@ $my_listings = $conn->query("
     <div class="modal">
         <div class="modal-icon" id="modal-icon">⚠️</div>
         <h3 id="modal-title"></h3>
-        <p id="modal-desc"><span class="modal-item-name" id="modal-item-name"></span></p>
+        <p id="modal-desc" class="modal-body-text"></p>
+        <p id="modal-item-name" class="modal-item-name"></p>
         <div class="modal-actions">
-            <button class="modal-cancel" onclick="closeModal()">Cancel</button>
+            <button type="button" class="modal-cancel" onclick="closeModal()">Cancel</button>
             <form id="modal-form" method="POST" action="dashboard.php" style="display:inline">
+                <?= csrf_field() ?>
                 <input type="hidden" id="modal-input" name="" value="">
                 <button type="submit" class="modal-confirm" id="modal-btn">Confirm</button>
             </form>
@@ -391,13 +414,13 @@ $my_listings = $conn->query("
         const isBid = type === 'bid';
         document.getElementById('modal-icon').textContent  = isBid ? '🏷️' : '🗑️';
         document.getElementById('modal-title').textContent = isBid ? 'Withdraw this bid?' : 'Remove this listing?';
-        document.getElementById('modal-desc').innerHTML    = isBid
-            ? 'Your bid will be removed and the auction price will update.'
-            : 'This will permanently delete the listing and all its bids.';
+        document.getElementById('modal-desc').textContent = isBid
+            ? 'If you continue, your bid will be deleted and the current auction price will be recalculated. You cannot put this exact bid back.'
+            : 'If you continue, this listing and all bids on it will be permanently deleted. You will not be able to recover it.';
         document.getElementById('modal-item-name').textContent = name;
         document.getElementById('modal-input').name  = isBid ? 'remove_bid_id' : 'remove_listing_id';
-        document.getElementById('modal-input').value = id;
-        document.getElementById('modal-btn').textContent = isBid ? 'Yes, withdraw' : 'Yes, remove';
+        document.getElementById('modal-input').value = String(id);
+        document.getElementById('modal-btn').textContent = isBid ? 'Yes, withdraw bid' : 'Yes, remove listing';
         document.getElementById('modal').classList.add('open');
     }
     function closeModal() {
@@ -406,6 +429,15 @@ $my_listings = $conn->query("
     document.getElementById('modal').addEventListener('click', function(e) {
         if (e.target === this) closeModal();
     });
+    (function () {
+        var toast = document.getElementById('dash-toast');
+        if (!toast) return;
+        var ms = <?= in_array($msg ?? '', ['listing_removed', 'bid_removed', 'invalid_session'], true) ? 10000 : 8000 ?>;
+        setTimeout(function () {
+            toast.classList.add('toast-hiding');
+            setTimeout(function () { toast.remove(); }, 450);
+        }, ms);
+    })();
 </script>
 </body>
 </html>
