@@ -37,5 +37,5 @@ define('AUBASE_DB_NAME', getenv('AUBASE_DB_NAME') ?: 'aubase');
 define('AUBASE_DB_USER', getenv('AUBASE_DB_USER') ?: 'root');
 define('AUBASE_DB_PASS', getenv('AUBASE_DB_PASS') ?: '12345678');
 
-/** Empty string = import.php only runnable from CLI. Set to allow ?key=... in browser. */
+/** Empty string = import only from CLI (`php scripts/import.php`). Set to allow `public/import.php?key=...` in browser. */
 define('AUBASE_IMPORT_KEY', getenv('AUBASE_IMPORT_KEY') ?: '');

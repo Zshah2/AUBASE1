@@ -1,11 +1,11 @@
 <?php
 /**
  * One-time: adds User.password_hash if missing. Run from project root:
- *   php migrate_password_hash.php
+ *   php database/migrate_password_hash.php
  */
 declare(strict_types=1);
 
-require_once __DIR__ . '/backend/db.php';
+require_once __DIR__ . '/../backend/db.php';
 
 $res = $conn->query(
     "SELECT COUNT(*) AS n FROM information_schema.COLUMNS

@@ -1,7 +1,7 @@
-    <?php
+<?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/backend/db.php';
+require_once __DIR__ . '/../backend/db.php';
 
 $token = isset($_GET['token']) ? trim((string) $_GET['token']) : '';
 if (strlen($token) !== 64 || !ctype_xdigit($token)) {

@@ -1,11 +1,11 @@
 <?php
 /**
  * One-time: adds User.created_at, User.deleted_at if missing.
- *   php migrate_account_settings.php
+ *   php database/migrate_account_settings.php
  */
 declare(strict_types=1);
 
-require_once __DIR__ . '/backend/db.php';
+require_once __DIR__ . '/../backend/db.php';
 
 function column_exists(mysqli $conn, string $name): bool
 {

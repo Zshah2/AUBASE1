@@ -41,29 +41,36 @@ Until then, run the app locally and capture the home page, an item with bids, th
 
 ---
 
-## Repository layout (important files)
+## Repository layout
 
 ```
 AuBase/
-├── index.php              # Catalog: filters, tabs, pagination
-├── item.php               # Single listing, place bid / buy now
-├── sell.php               # Create listing + auction
-├── dashboard.php          # Bids, listings, withdraw / remove + CSRF
-├── account.php            # Profile, credentials, optional delete
-├── login.php / register.php / logout.php
-├── forgot_password.php / reset_password.php
-├── verify.php / resend_verification.php
-├── import.php             # Loads bundled JSON into MySQL (CLI or keyed URL)
-├── db.sql                 # Base schema
-├── migrate_*.php          # Small one-off DB upgrades (see below)
-├── backend/
-│   ├── config.php         # .env loading, AUBASE_* constants
-│   ├── db.php             # mysqli connection
-│   ├── csrf.php           # Token helpers
-│   ├── auction_list.php   # Shared filter SQL for index
-│   └── mail_verify.php    # Optional verification / reset mail
-├── ebay_data/             # items-0.json … (demo import source)
-└── .env.example           # Copy to .env
+├── public/                 # Web document root (entry PHP only)
+│   ├── index.php           # Catalog: filters, tabs, pagination
+│   ├── item.php            # Single listing, bid / buy now
+│   ├── sell.php            # Create listing + auction
+│   ├── dashboard.php       # Bids, listings, withdraw / remove + CSRF
+│   ├── account.php         # Profile, credentials, soft delete
+│   ├── login.php / register.php / logout.php
+│   ├── forgot_password.php / reset_password.php
+│   ├── verify.php / resend_verification.php
+│   └── import.php          # Wrapper → ../scripts/import.php (browser + key)
+├── backend/                # Shared PHP (not URL-routed)
+│   ├── config.php          # .env → AUBASE_* constants
+│   ├── db.php              # mysqli connection
+│   ├── csrf.php
+│   ├── auction_list.php
+│   └── mail_verify.php
+├── database/
+│   ├── db.sql              # Base schema
+│   ├── db_migration_*.sql
+│   └── migrate_*.php     # One-off schema upgrades (CLI)
+├── scripts/
+│   └── import.php          # Demo JSON import (logic; CLI: php scripts/import.php)
+├── data/
+│   └── ebay_data/          # Optional: items-0.json … (see import)
+├── README.md
+└── .env.example
 ```
 
 ---
@@ -84,7 +91,7 @@ AuBase/
 
    ```bash
    mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS aubase CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
-   mysql -u root -p aubase < db.sql
+   mysql -u root -p aubase < database/db.sql
    ```
 
 3. **Environment file**
@@ -96,21 +103,21 @@ AuBase/
    Edit `.env` with your DB host, port, name, user, and password. See **Environment variables** below.
 
 4. **Optional: demo dataset**  
-   If `ebay_data/` JSON files are present, import them (large; can take a minute):
+   Put `items-0.json` … `items-39.json` under `data/ebay_data/` (ignored by git if large), then import (can take a minute):
 
    ```bash
-   php import.php
+   php scripts/import.php
    ```
 
-   Or set `AUBASE_IMPORT_KEY` in `.env` and open `import.php?key=YOUR_KEY` in the browser.
+   Or set `AUBASE_IMPORT_KEY` in `.env` and open `http://localhost:8080/import.php?key=YOUR_KEY` (only if you intentionally expose that URL).
 
-5. **Run PHP’s built-in server** from the project root:
+5. **Run PHP’s built-in server** with `public/` as the document root:
 
    ```bash
-   php -S localhost:8080
+   php -S localhost:8080 -t public
    ```
 
-6. Open **http://localhost:8080** — start at `index.php` (default document may depend on your server).
+6. Open **http://localhost:8080** — the home page is `public/index.php`.
 
 ---
 
@@ -123,7 +130,7 @@ AuBase/
 | `AUBASE_DB_NAME` | Database name (default `aubase`) |
 | `AUBASE_DB_USER` / `AUBASE_DB_PASS` | Credentials |
 | `AUBASE_DEMO_NOW` | `YYYY-MM-DD` “today” for open/closed auctions when using the historical demo dataset (default `2001-12-14`) |
-| `AUBASE_IMPORT_KEY` | If non-empty, allows browser `import.php?key=…`; empty = CLI only |
+| `AUBASE_IMPORT_KEY` | If non-empty, allows browser `import.php?key=…` (under `public/`); empty = CLI only |
 | `AUBASE_BASE_URL` | Used when sending mail links (verification / reset) |
 | `AUBASE_MAIL_FROM` | If set with working mail, enables **email verification** on register and supports **forgot password** |
 
@@ -133,14 +140,14 @@ If `AUBASE_MAIL_FROM` is **empty**, new accounts can typically use the site with
 
 ## Database migrations (optional features)
 
-Run from project root **after** `db.sql`, only when you need the feature:
+Run from project root **after** `database/db.sql`, only when you need the feature:
 
 | Script | What it adds |
 |--------|----------------|
-| `php migrate_password_hash.php` | Safer password storage if you started from an older schema |
-| `php migrate_email_verify.php` | Columns + flow for email verification |
-| `php migrate_password_reset.php` | Reset token columns for forgot password |
-| `php migrate_account_settings.php` | `User.created_at`, `User.deleted_at` for account page + soft delete |
+| `php database/migrate_password_hash.php` | Safer password storage if you started from an older schema |
+| `php database/migrate_email_verify.php` | Columns + flow for email verification |
+| `php database/migrate_password_reset.php` | Reset token columns for forgot password |
+| `php database/migrate_account_settings.php` | `User.created_at`, `User.deleted_at` for account page + soft delete |
 
 ---
 

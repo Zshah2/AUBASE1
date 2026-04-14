@@ -1,11 +1,11 @@
 <?php
 /**
  * One-time: adds password_reset_token, password_reset_expires on User if missing.
- *   php migrate_password_reset.php
+ *   php database/migrate_password_reset.php
  */
 declare(strict_types=1);
 
-require_once __DIR__ . '/backend/db.php';
+require_once __DIR__ . '/../backend/db.php';
 
 function column_exists(mysqli $conn, string $name): bool
 {

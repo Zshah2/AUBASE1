@@ -7,8 +7,8 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-require_once __DIR__ . '/backend/db.php';
-require_once __DIR__ . '/backend/csrf.php';
+require_once __DIR__ . '/../backend/db.php';
+require_once __DIR__ . '/../backend/csrf.php';
 
 $name    = (string) ($_SESSION['username'] ?? 'Member');
 $user_id = (string) $_SESSION['user_id'];

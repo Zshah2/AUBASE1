@@ -1,7 +1,7 @@
 <?php
 declare(strict_types=1);
 
-require_once __DIR__ . '/backend/config.php';
+require_once __DIR__ . '/../backend/config.php';
 
 $cli = php_sapi_name() === 'cli';
 $keyOk = AUBASE_IMPORT_KEY !== ''
@@ -11,11 +11,11 @@ $keyOk = AUBASE_IMPORT_KEY !== ''
 if (!$cli && !$keyOk) {
     http_response_code(403);
     header('Content-Type: text/plain; charset=UTF-8');
-    echo "Forbidden.\n\nRun: php import.php\nOr set AUBASE_IMPORT_KEY in .env and open:\n  import.php?key=YOUR_KEY\n";
+    echo "Forbidden.\n\nRun: php scripts/import.php\nOr set AUBASE_IMPORT_KEY in .env and open (docroot public/):\n  import.php?key=YOUR_KEY\n";
     exit;
 }
 
-require_once __DIR__ . '/backend/db.php';
+require_once __DIR__ . '/../backend/db.php';
 
 set_time_limit(600);
 ini_set('memory_limit', '512M');
@@ -43,7 +43,7 @@ function cleanDate($str) {
 }
 
 for ($i = 0; $i <= 39; $i++) {
-    $file = "ebay_data/items-{$i}.json";
+    $file = __DIR__ . '/../data/ebay_data/items-' . $i . '.json';
 
     if (!file_exists($file)) {
         $errors[] = "File not found: $file";

@@ -2,4 +2,4 @@
 .env
 vendor/
 *.log
-ebay_data/
+data/ebay_data/*.json

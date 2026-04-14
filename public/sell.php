@@ -2,7 +2,7 @@
 declare(strict_types=1);
 
 session_start();
-require_once __DIR__ . '/backend/db.php';
+require_once __DIR__ . '/../backend/db.php';
 
 $logged_in        = isset($_SESSION['user_id'], $_SESSION['username']);
 $session_username = $logged_in ? (string) $_SESSION['username'] : '';

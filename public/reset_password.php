@@ -4,65 +4,63 @@ declare(strict_types=1);
 session_start();
 
 if (isset($_SESSION['user_id'])) {
-    header('Location: index.php');
+    header('Location: dashboard.php');
     exit;
 }
 
-require_once __DIR__ . '/backend/db.php';
-require_once __DIR__ . '/backend/csrf.php';
-require_once __DIR__ . '/backend/mail_verify.php';
+require_once __DIR__ . '/../backend/db.php';
+require_once __DIR__ . '/../backend/csrf.php';
 
 $error = '';
-$mailConfigured = (getenv('AUBASE_MAIL_FROM') ?: '') !== '';
+$tokenIn = trim((string) ($_GET['token'] ?? $_POST['reset_token'] ?? ''));
+$tokenOk = strlen($tokenIn) === 64 && ctype_xdigit($tokenIn);
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && $tokenOk) {
     if (!csrf_verify()) {
-        $error = 'Invalid session. Please refresh the page and try again.';
-    } elseif (!$mailConfigured) {
-        $error = 'Password reset by email is not enabled (AUBASE_MAIL_FROM is not set). Ask the site administrator or configure mail in .env.';
+        $error = 'Invalid session. Please refresh and try again.';
     } else {
-        $email = trim((string) ($_POST['email'] ?? ''));
-        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            $error = 'Please enter a valid email address.';
+        $p1 = (string) ($_POST['password'] ?? '');
+        $p2 = (string) ($_POST['confirm'] ?? '');
+        if (strlen($p1) < 6) {
+            $error = 'Password must be at least 6 characters.';
+        } elseif ($p1 !== $p2) {
+            $error = 'Passwords do not match.';
         } else {
             $stmt = $conn->prepare(
-                'SELECT user_id, first_name FROM User WHERE email = ? AND password_hash IS NOT NULL LIMIT 1'
+                'SELECT user_id FROM User
+                 WHERE password_reset_token = ? AND password_reset_expires > NOW() AND password_hash IS NOT NULL
+                 LIMIT 1'
             );
-            $stmt->bind_param('s', $email);
+            $stmt->bind_param('s', $tokenIn);
             try {
                 $stmt->execute();
             } catch (mysqli_sql_exception $e) {
-                $error = 'Could not process request. If this persists, run: php migrate_password_reset.php';
+                $error = 'Database error. Run: php database/migrate_password_reset.php';
                 $stmt = null;
             }
             $row = ($stmt !== null) ? $stmt->get_result()->fetch_assoc() : null;
 
-            if ($row) {
-                $token = bin2hex(random_bytes(32));
-                $expires = date('Y-m-d H:i:s', strtotime('+1 hour'));
+            if (!$row) {
+                $error = 'This reset link is invalid or has expired. Request a new one from the sign-in page.';
+            } else {
+                $hash = password_hash($p1, PASSWORD_DEFAULT);
                 $uid = (string) $row['user_id'];
                 $upd = $conn->prepare(
-                    'UPDATE User SET password_reset_token = ?, password_reset_expires = ? WHERE user_id = ?'
+                    'UPDATE User SET
+                        password_hash = ?,
+                        password_reset_token = NULL,
+                        password_reset_expires = NULL,
+                        email_verified = 1
+                     WHERE user_id = ?'
                 );
-                $upd->bind_param('sss', $token, $expires, $uid);
+                $upd->bind_param('ss', $hash, $uid);
                 try {
                     $upd->execute();
+                    header('Location: login.php?reset=1');
+                    exit;
                 } catch (mysqli_sql_exception $e) {
-                    $error = 'Database is missing password reset columns. Run: php migrate_password_reset.php';
-                    $upd = null;
+                    $error = 'Could not update password. Run: php database/migrate_password_reset.php';
                 }
-                if ($upd !== null) {
-                    $name = (string) ($row['first_name'] ?? '');
-                    if (!aubase_send_password_reset_email($email, $name, $token)) {
-                        $error = 'Could not send email. Check AUBASE_MAIL_FROM and your server mail settings, then try again.';
-                    } else {
-                        header('Location: forgot_password.php?sent=1');
-                        exit;
-                    }
-                }
-            } else {
-                header('Location: forgot_password.php?sent=1');
-                exit;
             }
         }
     }
@@ -73,7 +71,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AuBase — Forgot password</title>
+    <title>AuBase — New password</title>
     <style>
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
         :root {
@@ -106,14 +104,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             background: #fff3f3; border: 1px solid #fecaca; color: #b91c1c;
             border-radius: 8px; padding: 12px 14px; font-size: 13px; margin-bottom: 14px; width: 100%;
         }
-        .alert-success {
-            background: #ecfdf5; border: 1px solid #6ee7b7; color: #065f46;
-        }
-        .alert-muted {
-            background: #f8fafc; border: 1px solid var(--border); color: var(--gray); font-size: 13px;
-        }
         .form-group { margin-bottom: 12px; width: 100%; }
-        input[type="email"] {
+        input[type="password"] {
             width: 100%; padding: 14px 16px; border: 1.5px solid var(--border); border-radius: 8px;
             font-size: 15px; background: var(--light); outline: none;
         }
@@ -141,29 +133,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </div>
 
 <div class="page">
-    <h1>Forgot password</h1>
-    <p class="sub">Enter the email on your account. If it exists, we’ll send a reset link (expires in one hour).</p>
-
-    <?php if (!$mailConfigured && !isset($_GET['sent'])): ?>
-        <div class="alert alert-muted" style="margin-bottom:18px">
-            Outbound email is not configured (<code>AUBASE_MAIL_FROM</code>). Password reset cannot send mail until that is set in <code>.env</code>, along with <code>AUBASE_BASE_URL</code>.
-        </div>
-    <?php endif; ?>
-
-    <?php if (isset($_GET['sent'])): ?>
-        <div class="alert alert-success" style="width:100%">
-            If an account exists for that email, we sent a reset link. Check your inbox and spam folder.
-        </div>
-        <p class="back"><a href="login.php">← Back to sign in</a></p>
+    <?php if (!$tokenOk): ?>
+        <h1>Invalid link</h1>
+        <p class="sub">This password reset link is missing or not valid.</p>
+        <p class="back"><a href="forgot_password.php">Request a new link</a> · <a href="login.php">Sign in</a></p>
     <?php else: ?>
+        <h1>Choose a new password</h1>
+        <p class="sub">Use at least 6 characters.</p>
         <?php if ($error): ?><div class="alert"><?= htmlspecialchars($error) ?></div><?php endif; ?>
         <form method="POST" style="width:100%">
             <?= csrf_field() ?>
+            <input type="hidden" name="reset_token" value="<?= htmlspecialchars($tokenIn) ?>">
             <div class="form-group">
-                <input type="email" name="email" required placeholder="Email address" autocomplete="email"
-                       value="<?= htmlspecialchars($_POST['email'] ?? '') ?>">
+                <input type="password" name="password" required minlength="6" placeholder="New password" autocomplete="new-password">
             </div>
-            <button type="submit" class="btn-primary" <?= $mailConfigured ? '' : 'disabled style="opacity:0.5;cursor:not-allowed"' ?>>Send reset link</button>
+            <div class="form-group">
+                <input type="password" name="confirm" required minlength="6" placeholder="Confirm password" autocomplete="new-password">
+            </div>
+            <button type="submit" class="btn-primary">Update password</button>
         </form>
         <p class="back"><a href="login.php">← Back to sign in</a></p>
     <?php endif; ?>

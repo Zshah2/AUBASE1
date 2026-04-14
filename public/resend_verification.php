@@ -2,9 +2,9 @@
 declare(strict_types=1);
 
 session_start();
-require_once __DIR__ . '/backend/db.php';
-require_once __DIR__ . '/backend/csrf.php';
-require_once __DIR__ . '/backend/mail_verify.php';
+require_once __DIR__ . '/../backend/db.php';
+require_once __DIR__ . '/../backend/csrf.php';
+require_once __DIR__ . '/../backend/mail_verify.php';
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     header('Location: login.php');

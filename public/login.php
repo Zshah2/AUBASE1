@@ -8,8 +8,8 @@ if (isset($_SESSION['user_id'])) {
     exit;
 }
 
-require_once __DIR__ . '/backend/db.php';
-require_once __DIR__ . '/backend/csrf.php';
+require_once __DIR__ . '/../backend/db.php';
+require_once __DIR__ . '/../backend/csrf.php';
 
 /** Same-origin relative redirect only; default dashboard after sign-in. */
 function aubase_safe_redirect(string $raw): string

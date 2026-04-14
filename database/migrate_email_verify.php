@@ -1,11 +1,11 @@
 <?php
 /**
  * One-time: adds email_verified, verify_token, verify_expires on User if missing.
- *   php migrate_email_verify.php
+ *   php database/migrate_email_verify.php
  */
 declare(strict_types=1);
 
-require_once __DIR__ . '/backend/db.php';
+require_once __DIR__ . '/../backend/db.php';
 
 function column_exists(mysqli $conn, string $name): bool
 {

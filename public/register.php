@@ -8,9 +8,9 @@ if (isset($_SESSION['user_id'])) {
     exit;
 }
 
-require_once __DIR__ . '/backend/db.php';
-require_once __DIR__ . '/backend/csrf.php';
-require_once __DIR__ . '/backend/mail_verify.php';
+require_once __DIR__ . '/../backend/db.php';
+require_once __DIR__ . '/../backend/csrf.php';
+require_once __DIR__ . '/../backend/mail_verify.php';
 
 $error   = '';
 $success = '';
