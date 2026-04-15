@@ -1,0 +1,118 @@
+================================================================================
+AuctionBase (AuBase) — CONSTRAINTS DOCUMENTATION
+================================================================================
+This file summarizes integrity constraints enforced in the database schema
+(database/db.sql) and additional rules enforced in application logic (PHP).
+
+Schema file: database/db.sql
+================================================================================
+
+1. USER
+--------------------------------------------------------------------------------
+  - user_id: PRIMARY KEY. No two users share the same User ID.
+  - username: UNIQUE (when present).
+  - email: UNIQUE (when present).
+  - Foreign keys elsewhere reference User(user_id), so sellers and bidders must
+    exist as users before items, bids, cards, orders, etc.
+
+2. ITEM
+--------------------------------------------------------------------------------
+  - item_id: PRIMARY KEY, AUTO_INCREMENT. No two items share the same Item ID.
+  - name: NOT NULL.
+  - seller_id: NOT NULL, FOREIGN KEY → User(user_id). Seller must be a user.
+
+3. CATEGORY
+--------------------------------------------------------------------------------
+  - category_id: PRIMARY KEY, AUTO_INCREMENT.
+  - name: UNIQUE, NOT NULL.
+
+4. ITEM_CATEGORY (item ↔ category many-to-many)
+--------------------------------------------------------------------------------
+  - PRIMARY KEY (item_id, category_id): an item cannot belong to the same
+    category more than once.
+  - item_id: FOREIGN KEY → Item(item_id).
+  - category_id: FOREIGN KEY → Category(category_id).
+
+5. AUCTION
+--------------------------------------------------------------------------------
+  - auction_id: PRIMARY KEY, AUTO_INCREMENT.
+  - item_id: UNIQUE, NOT NULL, FOREIGN KEY → Item(item_id).
+    → At most one auction per item (auction runs on a single item).
+  - start_time, end_time: NOT NULL.
+  - CHECK (end_time > start_time): end must be after start.
+  - starting_price, current_price: NOT NULL (denormalized performance fields).
+  - num_bids: stored count of bids for performance.
+
+6. BID
+--------------------------------------------------------------------------------
+  - bid_id: PRIMARY KEY, AUTO_INCREMENT.
+  - auction_id: FOREIGN KEY → Auction(auction_id). Every bid ties to a real auction.
+  - bidder_id: FOREIGN KEY → User(user_id). Bidder must be a user.
+  - amount, bid_time: NOT NULL.
+  - Application: each new bid must be strictly higher than the current auction
+    price (enforced in PHP with row lock / transaction on item page).
+
+7. CREDIT_CARD
+--------------------------------------------------------------------------------
+  - card_id: PRIMARY KEY, AUTO_INCREMENT.
+  - user_id: FOREIGN KEY → User(user_id).
+  - Application: bidder must have a valid (non-expired) card on file before
+    placing a bid or Buy It Now (enforced in PHP).
+
+8. REVIEW
+--------------------------------------------------------------------------------
+  - review_id: PRIMARY KEY, AUTO_INCREMENT.
+  - reviewer_id: FOREIGN KEY → User(user_id) (buyer leaving review).
+  - seller_id: FOREIGN KEY → User(user_id).
+  - auction_id: FOREIGN KEY → Auction(auction_id).
+  - rating: CHECK (rating BETWEEN 1 AND 5).
+  - Application: review after delivery confirmed; one review per buyer per
+    auction (enforced in PHP).
+
+9. SHIPPING_OPTION
+--------------------------------------------------------------------------------
+  - shipping_option_id: PRIMARY KEY, AUTO_INCREMENT.
+  - auction_id: FOREIGN KEY → Auction(auction_id).
+  - method, price: NOT NULL.
+  - is_pickup: indicates pickup option when true.
+
+10. BANKINFO
+--------------------------------------------------------------------------------
+  - bank_id: PRIMARY KEY, AUTO_INCREMENT.
+  - seller_id: UNIQUE, NOT NULL, FOREIGN KEY → User(user_id).
+    → One bank record per seller in this schema.
+  - bank_name, routing_number, account_number: NOT NULL.
+
+11. ORDER
+--------------------------------------------------------------------------------
+  - order_id: PRIMARY KEY, AUTO_INCREMENT.
+  - auction_id: UNIQUE, NOT NULL, FOREIGN KEY → Auction(auction_id).
+    → At most one order per auction (single winner checkout).
+  - buyer_id: FOREIGN KEY → User(user_id).
+  - card_id: FOREIGN KEY → CreditCard(card_id).
+  - shipping_option_id: FOREIGN KEY → ShippingOption(shipping_option_id).
+  - bid_amount, shipping_cost: NOT NULL.
+  - payment_status: ENUM('pending','paid','failed').
+  - Application: simulated payment sets paid + payment_time; seller enters
+    tracking; buyer confirms delivery; payment release described in UI as
+    simulated after confirmation.
+
+12. CURRENTTIME (system simulation)
+--------------------------------------------------------------------------------
+  - id: PRIMARY KEY (intended single row id = 1).
+  - system_time: NOT NULL — application treats this as “now” for open/closed
+    auctions and related deadlines.
+
+================================================================================
+APPLICATION-LEVEL RULES (not expressible as single SQL constraint)
+================================================================================
+  - Open vs closed auctions: compared to CurrentTime.system_time (same source
+    as catalog filters).
+  - Seller cannot bid on own listing.
+  - Listing creation: seller must have BankInfo; auction must have at least one
+    ShippingOption (or pickup) — enforced on sell flow.
+  - Winner checkout: only highest bidder after close; Order created once per auction.
+
+================================================================================
+END
+================================================================================
