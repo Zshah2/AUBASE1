@@ -21,8 +21,9 @@ $page     = isset($_GET['page']) ? max(1, (int) $_GET['page']) : 1;
 $per_page = 48;
 $offset   = ($page - 1) * $per_page;
 
-[$where_sql, $bind_types, $bind_params] = aubase_auction_filters($search, $category, $tab);
 $demo_ref_ts = aubase_now_ts($conn);
+$system_now_sql = date('Y-m-d H:i:s', $demo_ref_ts);
+[$where_sql, $bind_types, $bind_params] = aubase_auction_filters($search, $category, $tab, $system_now_sql);
 
 $base_from = "
     FROM Item i

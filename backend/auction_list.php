@@ -2,11 +2,12 @@
 declare(strict_types=1);
 
 /**
- * WHERE clause and bound params for auction listing (legacy demo date AUBASE_DEMO_NOW).
+ * WHERE clause and bound params for auction listing.
+ * $systemNow must match AuctionBase system time (CurrentTime table), same as item.php / dashboard.
  *
  * @return array{0: string, 1: string, 2: list<mixed>}
  */
-function aubase_auction_filters(string $search, string $category, string $tab): array
+function aubase_auction_filters(string $search, string $category, string $tab, string $systemNow): array
 {
     $conditions = [];
     $types = '';
@@ -23,15 +24,14 @@ function aubase_auction_filters(string $search, string $category, string $tab): 
         $params[] = $category;
     }
 
-    $demo = AUBASE_DEMO_NOW;
     if ($tab === 'open') {
         $conditions[] = 'a.end_time > ?';
         $types .= 's';
-        $params[] = $demo;
+        $params[] = $systemNow;
     } elseif ($tab === 'closed') {
         $conditions[] = 'a.end_time <= ?';
         $types .= 's';
-        $params[] = $demo;
+        $params[] = $systemNow;
     } elseif ($tab === 'buynow') {
         $conditions[] = 'a.buy_price IS NOT NULL';
     }
