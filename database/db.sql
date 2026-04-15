@@ -20,7 +20,7 @@ SET FOREIGN_KEY_CHECKS=1;
 -- Recreate with BIGINT for item_id
 CREATE TABLE User (
                       user_id VARCHAR(50) PRIMARY KEY,
-                      username VARCHAR(100),
+                      username VARCHAR(100) UNIQUE,
                       email VARCHAR(100) UNIQUE,
                       first_name VARCHAR(50),
                       last_name VARCHAR(50),
@@ -38,7 +38,7 @@ CREATE TABLE User (
 );
 
 CREATE TABLE Item (
-                      item_id BIGINT PRIMARY KEY,
+                      item_id BIGINT AUTO_INCREMENT PRIMARY KEY,
                       name VARCHAR(255) NOT NULL,
                       description TEXT,
                       location VARCHAR(255),
@@ -149,7 +149,9 @@ CREATE TABLE CurrentTime (
                              system_time DATETIME NOT NULL
 );
 
-INSERT INTO CurrentTime (id, system_time) VALUES (1, NOW());
+INSERT INTO CurrentTime (id, system_time)
+VALUES (1, NOW())
+ON DUPLICATE KEY UPDATE system_time = VALUES(system_time);
 
 
 

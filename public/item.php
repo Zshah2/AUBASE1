@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 session_start();
 require_once __DIR__ . '/../backend/db.php';
+require_once __DIR__ . '/../backend/time.php';
 
 $id = isset($_GET['id']) ? (int) $_GET['id'] : 0;
 if ($id < 1) { header('Location: index.php'); exit; }
@@ -11,7 +12,7 @@ $logged_in        = isset($_SESSION['user_id'], $_SESSION['username']);
 $session_user_id  = $logged_in ? (string) $_SESSION['user_id'] : '';
 $session_username = $logged_in ? (string) $_SESSION['username'] : '';
 
-$demo_ref_ts = strtotime(AUBASE_DEMO_NOW);
+$demo_ref_ts = aubase_now_ts($conn);
 
 // ── Fetch item ──
 $stmt = $conn->prepare(
@@ -32,6 +33,8 @@ if (!$item) { http_response_code(404); }
 
 $errors  = [];
 $success = '';
+$checkout_allowed = false;
+$checkout_label = '';
 
 if ($item) {
     $is_closed  = strtotime($item['end_time']) <= $demo_ref_ts;
@@ -69,10 +72,22 @@ if ($item) {
         if ($is_seller) {
             $errors[] = 'You cannot bid on your own item.';
         } else {
+            // AuctionBase constraint: bidder must have a valid credit card on file.
+            $hasCardStmt = $conn->prepare('SELECT 1 FROM CreditCard WHERE user_id = ? AND expiration_date >= CURDATE() LIMIT 1');
+            $hasCardStmt->bind_param('s', $session_user_id);
+            $hasCardStmt->execute();
+            $hasValidCard = $hasCardStmt->get_result()->num_rows > 0;
+            if (!$hasValidCard) {
+                $errors[] = 'You need a valid credit card on file before you can bid. Add one in Account settings.';
+            }
+
             $action = $_POST['action'] ?? '';
 
             // PLACE BID
             if ($action === 'bid') {
+                if (!$hasValidCard) {
+                    // do nothing; error already shown
+                } else {
                 $bid_amount = (float)($_POST['bid_amount'] ?? 0);
                 if ($bid_amount < $min_bid) {
                     $errors[] = 'Your bid must be at least $' . number_format($min_bid, 2) . '.';
@@ -110,10 +125,14 @@ if ($item) {
                         $errors[] = $e->getMessage();
                     }
                 }
+                }
             }
 
             // BUY IT NOW
             if ($action === 'buynow' && $has_buy) {
+                if (!$hasValidCard) {
+                    // do nothing; error already shown
+                } else {
                 $buy_price = (float)$item['buy_price'];
                 $conn->begin_transaction();
                 try {
@@ -136,6 +155,7 @@ if ($item) {
                     $conn->rollback();
                     $errors[] = $e->getMessage();
                 }
+                }
             }
         }
     }
@@ -150,6 +170,30 @@ if ($item) {
     elseif ($diff > 0)   $time_str = "{$mins}m remaining";
     else                 $time_str = "Auction ended";
     $is_ending = !$is_closed && $days === 0 && $hours < 2;
+
+    // If closed: show checkout to winning bidder (if not already ordered)
+    if ($is_closed && $logged_in && !$is_seller) {
+        $aid = (int) $item['auction_id'];
+        $w = $conn->prepare("SELECT bidder_id FROM Bid WHERE auction_id = ? ORDER BY amount DESC, bid_time ASC LIMIT 1");
+        $w->bind_param('i', $aid);
+        $w->execute();
+        $wr = $w->get_result()->fetch_assoc();
+        $winnerId = $wr ? (string) $wr['bidder_id'] : '';
+
+        if ($winnerId !== '' && $winnerId === $session_user_id) {
+            $o = $conn->prepare("SELECT order_id, tracking_number, delivery_confirmed FROM `Order` WHERE auction_id = ? LIMIT 1");
+            $o->bind_param('i', $aid);
+            $o->execute();
+            $or = $o->get_result()->fetch_assoc();
+            if (!$or) {
+                $checkout_allowed = true;
+                $checkout_label = 'Checkout now';
+            } else {
+                $checkout_allowed = true;
+                $checkout_label = ((string) ($or['delivery_confirmed'] ?? '0') === '1') ? 'Delivery confirmed' : 'View order status';
+            }
+        }
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -487,8 +531,14 @@ if ($item) {
                     <?php if ($is_closed): ?>
                         <div class="closed-msg">
                             <h3>Auction ended</h3>
-                            <p>This auction is now closed. Browse other listings to find similar items.</p>
-                            <a href="index.php" style="display:inline-block;margin-top:16px;background:var(--navy);color:#fff;padding:10px 24px;border-radius:50px;font-size:13.5px;font-weight:600">Browse listings</a>
+                            <?php if ($checkout_allowed): ?>
+                                <p>You won this auction. Complete checkout in your dashboard.</p>
+                                <a href="checkout.php?item_id=<?= (int) $item['item_id'] ?>" style="display:inline-block;margin-top:16px;background:var(--navy);color:#fff;padding:10px 24px;border-radius:50px;font-size:13.5px;font-weight:600"><?= htmlspecialchars($checkout_label) ?></a>
+                                <br><a href="dashboard.php" style="color:var(--navy);font-weight:600;margin-top:10px;display:inline-block">Go to dashboard →</a>
+                            <?php else: ?>
+                                <p>This auction is now closed. Browse other listings to find similar items.</p>
+                                <a href="index.php" style="display:inline-block;margin-top:16px;background:var(--navy);color:#fff;padding:10px 24px;border-radius:50px;font-size:13.5px;font-weight:600">Browse listings</a>
+                            <?php endif; ?>
                         </div>
 
                     <?php elseif ($is_seller): ?>

@@ -9,11 +9,12 @@ if (!isset($_SESSION['user_id'])) {
 
 require_once __DIR__ . '/../backend/db.php';
 require_once __DIR__ . '/../backend/csrf.php';
+require_once __DIR__ . '/../backend/time.php';
 
 $name    = (string) ($_SESSION['username'] ?? 'Member');
 $user_id = (string) $_SESSION['user_id'];
 $uid_esc = $conn->real_escape_string($user_id);
-$demo_ref_ts = defined('AUBASE_DEMO_NOW') ? strtotime(AUBASE_DEMO_NOW) : time();
+$demo_ref_ts = aubase_now_ts($conn);
 
 // Withdraw bid
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_bid_id'])) {
@@ -68,6 +69,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['remove_listing_id']))
     exit;
 }
 
+// Seller: set tracking number
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['set_tracking_order_id'])) {
+    if (!csrf_verify()) {
+        header('Location: dashboard.php?msg=invalid_session');
+        exit;
+    }
+    $orderId = (int) $_POST['set_tracking_order_id'];
+    $tracking = trim((string) ($_POST['tracking_number'] ?? ''));
+    if ($orderId > 0 && $tracking !== '') {
+        $stmt = $conn->prepare(
+            "UPDATE `Order` o
+             JOIN Auction a ON o.auction_id = a.auction_id
+             JOIN Item i ON a.item_id = i.item_id
+             SET o.tracking_number = ?
+             WHERE o.order_id = ? AND i.seller_id = ?"
+        );
+        $stmt->bind_param('sis', $tracking, $orderId, $user_id);
+        $stmt->execute();
+    }
+    header('Location: dashboard.php?msg=tracking_saved');
+    exit;
+}
+
+// Buyer: confirm delivery
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['confirm_delivery_order_id'])) {
+    if (!csrf_verify()) {
+        header('Location: dashboard.php?msg=invalid_session');
+        exit;
+    }
+    $orderId = (int) $_POST['confirm_delivery_order_id'];
+    if ($orderId > 0) {
+        $stmt = $conn->prepare("UPDATE `Order` SET delivery_confirmed = 1 WHERE order_id = ? AND buyer_id = ?");
+        $stmt->bind_param('is', $orderId, $user_id);
+        $stmt->execute();
+    }
+    header('Location: dashboard.php?msg=delivery_confirmed');
+    exit;
+}
+
 $msg = $_GET['msg'] ?? '';
 
 $total_bids = (int) $conn->query("SELECT COUNT(*) AS c FROM Bid WHERE bidder_id = '$uid_esc'")->fetch_assoc()['c'];
@@ -89,6 +129,25 @@ $my_listings = $conn->query("
     JOIN Auction a ON i.item_id = a.item_id
     WHERE i.seller_id = '$uid_esc'
     ORDER BY a.num_bids DESC LIMIT 25
+");
+
+$my_purchases = $conn->query("
+    SELECT o.order_id, o.payment_status, o.payment_time, o.tracking_number, o.delivery_confirmed,
+           i.item_id, i.name, a.current_price
+    FROM `Order` o
+    JOIN Auction a ON o.auction_id = a.auction_id
+    JOIN Item i ON a.item_id = i.item_id
+    WHERE o.buyer_id = '$uid_esc'
+    ORDER BY o.order_id DESC LIMIT 25
+");
+
+$to_ship = $conn->query("
+    SELECT o.order_id, o.payment_time, o.tracking_number, i.item_id, i.name, a.current_price
+    FROM `Order` o
+    JOIN Auction a ON o.auction_id = a.auction_id
+    JOIN Item i ON a.item_id = i.item_id
+    WHERE i.seller_id = '$uid_esc' AND o.payment_status = 'paid'
+    ORDER BY o.order_id DESC LIMIT 25
 ");
 ?>
 <!DOCTYPE html>
@@ -251,6 +310,14 @@ $my_listings = $conn->query("
                 echo 'Your bid has been removed. The auction price was updated. You cannot restore this bid.';
             } elseif ($msg === 'listing_removed') {
                 echo 'Your listing has been permanently removed along with its bids. You cannot reclaim it or undo this.';
+            } elseif ($msg === 'order_paid') {
+                echo 'Payment recorded. The seller must ship within two business days. You can track and confirm delivery below.';
+            } elseif ($msg === 'tracking_saved') {
+                echo 'Tracking information saved. The buyer can now confirm delivery.';
+            } elseif ($msg === 'delivery_confirmed') {
+                echo 'Delivery confirmed. Payment is now released to the seller (simulated).';
+            } elseif ($msg === 'review_saved') {
+                echo 'Review saved. Thanks for helping the community.';
             } elseif ($msg === 'invalid_session') {
                 echo 'That action could not be completed. Refresh the page and try again.';
             } else {
@@ -262,6 +329,136 @@ $my_listings = $conn->query("
 <?php endif; ?>
 
 <div class="dash-body">
+
+    <!-- Purchases -->
+    <div class="panel" style="grid-column:1/-1" id="panel-purchases">
+        <div class="panel-head">
+            <h2>My Purchases</h2>
+            <a href="index.php">Browse more →</a>
+        </div>
+        <div class="panel-body">
+            <?php if ($my_purchases && $my_purchases->num_rows > 0): ?>
+                <?php while ($p = $my_purchases->fetch_assoc()):
+                    $price = '$' . number_format((float) $p['current_price'], 2);
+                    $delivered = (int) ($p['delivery_confirmed'] ?? 0) === 1;
+                    $hasTrack = (string) ($p['tracking_number'] ?? '') !== '';
+                    $reviewed = false;
+                    if ($delivered) {
+                        $oid = (int) $p['order_id'];
+                        $rv = $conn->query(
+                            "SELECT 1
+                             FROM Review r
+                             JOIN `Order` o2 ON r.auction_id = o2.auction_id
+                             WHERE o2.order_id = $oid AND r.reviewer_id = '$uid_esc'
+                             LIMIT 1"
+                        );
+                        $reviewed = $rv && $rv->num_rows > 0;
+                    }
+                    ?>
+                    <div class="row-item">
+                        <a class="row-hit" href="item.php?id=<?= (int) $p['item_id'] ?>">
+                            <span class="row-info">
+                                <span class="row-name"><?= htmlspecialchars((string) $p['name']) ?></span>
+                                <span class="row-meta">
+                                    Status:
+                                    <?php if ($delivered): ?>
+                                        <span class="is-winning">● Delivered</span>
+                                    <?php elseif ($hasTrack): ?>
+                                        <span class="is-winning">● Shipped</span> · Tracking: <strong><?= htmlspecialchars((string) $p['tracking_number']) ?></strong>
+                                    <?php else: ?>
+                                        <span style="color:var(--muted)">Paid · Awaiting shipment</span>
+                                    <?php endif; ?>
+                                </span>
+                            </span>
+                            <span class="row-right">
+                                <span class="row-price"><?= $price ?></span>
+                                <span class="row-sub">Paid</span>
+                            </span>
+                        </a>
+                        <?php if ($hasTrack && !$delivered): ?>
+                            <div class="row-actions" style="opacity:1;pointer-events:auto">
+                                <form method="post" action="dashboard.php" style="display:inline">
+                                    <?= csrf_field() ?>
+                                    <input type="hidden" name="confirm_delivery_order_id" value="<?= (int) $p['order_id'] ?>">
+                                    <button type="submit" class="btn-remove" style="background:var(--green-bg);border-color:#a7f3d0;color:var(--green)">Confirm delivery</button>
+                                </form>
+                            </div>
+                        <?php elseif ($delivered && !$reviewed): ?>
+                            <div class="row-actions" style="opacity:1;pointer-events:auto">
+                                <a class="btn-remove" style="background:var(--sky-wash);border-color:var(--navy-3);color:var(--navy)"
+                                   href="review.php?order_id=<?= (int) $p['order_id'] ?>">Leave review</a>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                <?php endwhile; ?>
+            <?php else: ?>
+                <div class="empty">
+                    <div class="empty-icon">🧾</div>
+                    <h3>No purchases yet</h3>
+                    <p>Win an auction to check out and track delivery.</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- Orders to ship -->
+    <div class="panel" style="grid-column:1/-1" id="panel-ship">
+        <div class="panel-head">
+            <h2>Orders to Ship</h2>
+            <a href="sell.php">List an item →</a>
+        </div>
+        <div class="panel-body">
+            <?php if ($to_ship && $to_ship->num_rows > 0): ?>
+                <?php while ($o = $to_ship->fetch_assoc()):
+                    $price = '$' . number_format((float) $o['current_price'], 2);
+                    $tracking = trim((string) ($o['tracking_number'] ?? ''));
+                    $paidAt = (string) ($o['payment_time'] ?? '');
+                    $overdue = false;
+                    if ($paidAt !== '') {
+                        $overdue = ($demo_ref_ts > (strtotime($paidAt) + 2 * 86400)) && $tracking === '';
+                    }
+                    ?>
+                    <div class="row-item">
+                        <a class="row-hit" href="item.php?id=<?= (int) $o['item_id'] ?>">
+                            <span class="row-info">
+                                <span class="row-name"><?= htmlspecialchars((string) $o['name']) ?></span>
+                                <span class="row-meta">
+                                    <?php if ($tracking !== ''): ?>
+                                        <span class="is-winning">● Shipped</span> · Tracking: <strong><?= htmlspecialchars($tracking) ?></strong>
+                                    <?php else: ?>
+                                        <span style="color:<?= $overdue ? 'var(--red)' : 'var(--muted)' ?>">
+                                            <?= $overdue ? 'Overdue: ship within 2 business days' : 'Paid: add tracking to mark shipped' ?>
+                                        </span>
+                                    <?php endif; ?>
+                                </span>
+                            </span>
+                            <span class="row-right">
+                                <span class="row-price"><?= $price ?></span>
+                                <span class="row-sub">Order</span>
+                            </span>
+                        </a>
+                        <?php if ($tracking === ''): ?>
+                            <div class="row-actions" style="opacity:1;pointer-events:auto">
+                                <form method="post" action="dashboard.php" style="display:flex;gap:8px;align-items:center">
+                                    <?= csrf_field() ?>
+                                    <input type="hidden" name="set_tracking_order_id" value="<?= (int) $o['order_id'] ?>">
+                                    <input type="text" name="tracking_number" placeholder="Tracking #" required maxlength="100"
+                                           style="padding:6px 10px;border:1px solid var(--border-2);border-radius:50px;font-size:12px;min-width:160px">
+                                    <button type="submit" class="btn-remove">Save</button>
+                                </form>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                <?php endwhile; ?>
+            <?php else: ?>
+                <div class="empty">
+                    <div class="empty-icon">📦</div>
+                    <h3>No orders yet</h3>
+                    <p>Once a buyer checks out, you’ll add tracking here.</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
 
     <!-- My Bids -->
     <div class="panel" id="panel-bids">

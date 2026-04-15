@@ -4,6 +4,7 @@ declare(strict_types=1);
 session_start();
 require_once __DIR__ . '/../backend/db.php';
 require_once __DIR__ . '/../backend/auction_list.php';
+require_once __DIR__ . '/../backend/time.php';
 
 $logged_in = isset($_SESSION['user_id'], $_SESSION['username']);
 $session_username = $logged_in ? (string) $_SESSION['username'] : '';
@@ -21,7 +22,7 @@ $per_page = 48;
 $offset   = ($page - 1) * $per_page;
 
 [$where_sql, $bind_types, $bind_params] = aubase_auction_filters($search, $category, $tab);
-$demo_ref_ts = strtotime(AUBASE_DEMO_NOW);
+$demo_ref_ts = aubase_now_ts($conn);
 
 $base_from = "
     FROM Item i

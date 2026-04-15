@@ -21,8 +21,16 @@ $errors = [
     'email'    => '',
     'password' => '',
     'delete'   => '',
+    'card'     => '',
+    'bank'     => '',
 ];
 $saved = $_GET['saved'] ?? '';
+
+function aubase_cc_last4(string $num): string
+{
+    $d = preg_replace('/\D+/', '', $num) ?: '';
+    return strlen($d) >= 4 ? substr($d, -4) : $d;
+}
 
 function aubase_load_user(mysqli $conn, string $userId): ?array
 {
@@ -246,10 +254,151 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && csrf_verify()) {
             }
         }
     }
+
+    if ($action === 'card_save') {
+        $cardNumber = trim((string) ($_POST['card_number'] ?? ''));
+        $expRaw     = trim((string) ($_POST['expiration_date'] ?? ''));
+        $ccv        = trim((string) ($_POST['ccv'] ?? ''));
+        $holder     = trim((string) ($_POST['cardholder_name'] ?? ''));
+        $billing    = trim((string) ($_POST['billing_address'] ?? ''));
+
+        $digits = preg_replace('/\D+/', '', $cardNumber) ?: '';
+        if (strlen($digits) < 12 || strlen($digits) > 19) {
+            $errors['card'] = 'Card number looks invalid.';
+        } elseif (!preg_match('/^\d{3,4}$/', $ccv)) {
+            $errors['card'] = 'CCV must be 3–4 digits.';
+        } elseif ($holder === '' || strlen($holder) > 100) {
+            $errors['card'] = 'Cardholder name is required.';
+        } elseif ($billing === '' || strlen($billing) > 255) {
+            $errors['card'] = 'Billing address is required.';
+        } elseif (!preg_match('/^\d{4}-\d{2}$/', $expRaw)) {
+            $errors['card'] = 'Expiration must be in YYYY-MM format.';
+        } else {
+            $expStart = strtotime($expRaw . '-01');
+            if ($expStart === false) {
+                $errors['card'] = 'Expiration date is invalid.';
+            } else {
+                $expEnd = date('Y-m-t', $expStart);
+                if (strtotime($expEnd) < strtotime(date('Y-m-d'))) {
+                    $errors['card'] = 'That card is expired.';
+                }
+            }
+        }
+
+        if ($errors['card'] === '') {
+            $expEnd = date('Y-m-t', strtotime($expRaw . '-01'));
+
+            // Keep exactly one card on file per user for the assignment constraint.
+            $stmt = $conn->prepare('SELECT card_id FROM CreditCard WHERE user_id = ? ORDER BY card_id DESC LIMIT 1');
+            $stmt->bind_param('s', $userId);
+            $stmt->execute();
+            $row = $stmt->get_result()->fetch_assoc();
+
+            if ($row) {
+                $cardId = (int) $row['card_id'];
+                $upd = $conn->prepare(
+                    'UPDATE CreditCard
+                        SET card_number = ?, expiration_date = ?, ccv = ?, cardholder_name = ?, billing_address = ?
+                      WHERE card_id = ? AND user_id = ?'
+                );
+                $upd->bind_param('sssssis', $digits, $expEnd, $ccv, $holder, $billing, $cardId, $userId);
+                try {
+                    $upd->execute();
+                    header('Location: account.php?saved=card');
+                    exit;
+                } catch (mysqli_sql_exception $e) {
+                    $errors['card'] = 'Could not save card.';
+                }
+            } else {
+                $ins = $conn->prepare(
+                    'INSERT INTO CreditCard (user_id, card_number, expiration_date, ccv, cardholder_name, billing_address)
+                     VALUES (?,?,?,?,?,?)'
+                );
+                $ins->bind_param('ssssss', $userId, $digits, $expEnd, $ccv, $holder, $billing);
+                try {
+                    $ins->execute();
+                    header('Location: account.php?saved=card');
+                    exit;
+                } catch (mysqli_sql_exception $e) {
+                    $errors['card'] = 'Could not save card.';
+                }
+            }
+        }
+    }
+
+    if ($action === 'card_delete') {
+        $del = $conn->prepare('DELETE FROM CreditCard WHERE user_id = ?');
+        $del->bind_param('s', $userId);
+        try {
+            $del->execute();
+            header('Location: account.php?saved=card_deleted');
+            exit;
+        } catch (mysqli_sql_exception $e) {
+            $errors['card'] = 'Could not remove card.';
+        }
+    }
+
+    if ($action === 'bank_save') {
+        $bankName = trim((string) ($_POST['bank_name'] ?? ''));
+        $routing  = trim((string) ($_POST['routing_number'] ?? ''));
+        $account  = trim((string) ($_POST['account_number'] ?? ''));
+
+        $routingDigits = preg_replace('/\D+/', '', $routing) ?: '';
+        $acctDigits    = preg_replace('/\D+/', '', $account) ?: '';
+
+        if ($bankName === '' || strlen($bankName) > 100) {
+            $errors['bank'] = 'Bank name is required.';
+        } elseif (strlen($routingDigits) < 5 || strlen($routingDigits) > 20) {
+            $errors['bank'] = 'Routing number looks invalid.';
+        } elseif (strlen($acctDigits) < 5 || strlen($acctDigits) > 20) {
+            $errors['bank'] = 'Account number looks invalid.';
+        } else {
+            // Upsert: BankInfo.seller_id is UNIQUE
+            $stmt = $conn->prepare('SELECT bank_id FROM BankInfo WHERE seller_id = ? LIMIT 1');
+            $stmt->bind_param('s', $userId);
+            $stmt->execute();
+            $row = $stmt->get_result()->fetch_assoc();
+
+            if ($row) {
+                $bankId = (int) $row['bank_id'];
+                $upd = $conn->prepare('UPDATE BankInfo SET bank_name = ?, routing_number = ?, account_number = ? WHERE bank_id = ? AND seller_id = ?');
+                $upd->bind_param('sssds', $bankName, $routingDigits, $acctDigits, $bankId, $userId);
+                try {
+                    $upd->execute();
+                    header('Location: account.php?saved=bank');
+                    exit;
+                } catch (mysqli_sql_exception $e) {
+                    $errors['bank'] = 'Could not save bank information.';
+                }
+            } else {
+                $ins = $conn->prepare('INSERT INTO BankInfo (seller_id, bank_name, routing_number, account_number) VALUES (?,?,?,?)');
+                $ins->bind_param('ssss', $userId, $bankName, $routingDigits, $acctDigits);
+                try {
+                    $ins->execute();
+                    header('Location: account.php?saved=bank');
+                    exit;
+                } catch (mysqli_sql_exception $e) {
+                    $errors['bank'] = 'Could not save bank information.';
+                }
+            }
+        }
+    }
 }
 
 $user = aubase_load_user($conn, $userId) ?? $user;
 $name = (string) ($_SESSION['username'] ?? $user['username'] ?? 'Member');
+
+$cardRow = null;
+$stmtCard = $conn->prepare('SELECT card_id, card_number, expiration_date, cardholder_name, billing_address FROM CreditCard WHERE user_id = ? ORDER BY card_id DESC LIMIT 1');
+$stmtCard->bind_param('s', $userId);
+$stmtCard->execute();
+$cardRow = $stmtCard->get_result()->fetch_assoc() ?: null;
+
+$bankRow = null;
+$stmtBank = $conn->prepare('SELECT bank_name, routing_number, account_number FROM BankInfo WHERE seller_id = ? LIMIT 1');
+$stmtBank->bind_param('s', $userId);
+$stmtBank->execute();
+$bankRow = $stmtBank->get_result()->fetch_assoc() ?: null;
 
 $memberSince = '';
 if (!empty($user['created_at'])) {
@@ -269,6 +418,12 @@ if ($saved === 'profile') {
     $notice = 'Email updated. We sent a verification link to your new address—use it before you sign in again.';
 } elseif ($saved === 'password') {
     $notice = 'Password updated.';
+} elseif ($saved === 'card') {
+    $notice = 'Payment method saved.';
+} elseif ($saved === 'card_deleted') {
+    $notice = 'Payment method removed.';
+} elseif ($saved === 'bank') {
+    $notice = 'Bank information saved.';
 }
 ?>
 <!DOCTYPE html>
@@ -392,6 +547,8 @@ if ($saved === 'profile') {
         <a href="#username">Username</a>
         <a href="#email">Email</a>
         <a href="#password">Password</a>
+        <a href="#payment">Payment</a>
+        <a href="#payout">Payout</a>
         <a href="#close-account">Close account</a>
     </nav>
 
@@ -567,6 +724,116 @@ if ($saved === 'profile') {
                     <button type="submit" class="btn">Update password</button>
                 </form>
                 <?php endif; ?>
+            </div>
+        </div>
+    </section>
+
+    <section class="sec" id="payment">
+        <div class="card">
+            <div class="card-h">
+                <h2>Payment</h2>
+                <p>To place bids, AuctionBase requires a valid credit card on file.</p>
+            </div>
+            <div class="card-b">
+                <?php if ($errors['card'] !== ''): ?><div class="err"><?= htmlspecialchars($errors['card']) ?></div><?php endif; ?>
+
+                <?php if ($cardRow): ?>
+                    <p class="field-hint" style="margin-bottom:14px">
+                        Card on file: <strong>•••• <?= htmlspecialchars(aubase_cc_last4((string) $cardRow['card_number'])) ?></strong>
+                        · Expires <strong><?= htmlspecialchars(date('M Y', strtotime((string) $cardRow['expiration_date']))) ?></strong>
+                    </p>
+                <?php else: ?>
+                    <p class="field-hint" style="margin-bottom:14px">No credit card on file yet.</p>
+                <?php endif; ?>
+
+                <form method="post">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="action" value="card_save">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="card_number">Card number</label>
+                            <input type="text" id="card_number" name="card_number" required maxlength="23" autocomplete="cc-number"
+                                   value="<?= htmlspecialchars((string) ($_POST['card_number'] ?? ($cardRow['card_number'] ?? ''))) ?>">
+                            <p class="field-hint">Digits only; spaces are OK.</p>
+                        </div>
+                        <div class="field">
+                            <label for="expiration_date">Expiration (YYYY-MM)</label>
+                            <input type="text" id="expiration_date" name="expiration_date" required maxlength="7" autocomplete="cc-exp"
+                                   placeholder="2028-07"
+                                   value="<?= htmlspecialchars((string) ($_POST['expiration_date'] ?? ($cardRow ? date('Y-m', strtotime((string) $cardRow['expiration_date'])) : ''))) ?>">
+                        </div>
+                    </div>
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="ccv">CCV</label>
+                            <input type="text" id="ccv" name="ccv" required maxlength="4" autocomplete="cc-csc"
+                                   value="<?= htmlspecialchars((string) ($_POST['ccv'] ?? '')) ?>">
+                        </div>
+                        <div class="field">
+                            <label for="cardholder_name">Cardholder name</label>
+                            <input type="text" id="cardholder_name" name="cardholder_name" required maxlength="100" autocomplete="cc-name"
+                                   value="<?= htmlspecialchars((string) ($_POST['cardholder_name'] ?? ($cardRow['cardholder_name'] ?? ''))) ?>">
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="billing_address">Billing address</label>
+                        <input type="text" id="billing_address" name="billing_address" required maxlength="255" autocomplete="billing street-address"
+                               value="<?= htmlspecialchars((string) ($_POST['billing_address'] ?? ($cardRow['billing_address'] ?? ''))) ?>">
+                    </div>
+                    <button type="submit" class="btn">Save card</button>
+                </form>
+
+                <?php if ($cardRow): ?>
+                    <form method="post" style="margin-top:12px" onsubmit="return confirm('Remove this card? You will not be able to bid until you add another one.');">
+                        <?= csrf_field() ?>
+                        <input type="hidden" name="action" value="card_delete">
+                        <button type="submit" class="btn btn-danger">Remove card</button>
+                    </form>
+                <?php endif; ?>
+            </div>
+        </div>
+    </section>
+
+    <section class="sec" id="payout">
+        <div class="card">
+            <div class="card-h">
+                <h2>Payout (seller bank info)</h2>
+                <p>When you sell an item, AuctionBase records bank info for releasing payment after delivery.</p>
+            </div>
+            <div class="card-b">
+                <?php if ($errors['bank'] !== ''): ?><div class="err"><?= htmlspecialchars($errors['bank']) ?></div><?php endif; ?>
+                <?php if ($bankRow): ?>
+                    <p class="field-hint" style="margin-bottom:14px">
+                        Bank on file: <strong><?= htmlspecialchars((string) $bankRow['bank_name']) ?></strong>
+                        · Routing <strong>•••• <?= htmlspecialchars(substr((string) $bankRow['routing_number'], -4)) ?></strong>
+                        · Account <strong>•••• <?= htmlspecialchars(substr((string) $bankRow['account_number'], -4)) ?></strong>
+                    </p>
+                <?php else: ?>
+                    <p class="field-hint" style="margin-bottom:14px">No bank info on file yet.</p>
+                <?php endif; ?>
+
+                <form method="post">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="action" value="bank_save">
+                    <div class="grid-2">
+                        <div class="field">
+                            <label for="bank_name">Bank name</label>
+                            <input type="text" id="bank_name" name="bank_name" required maxlength="100"
+                                   value="<?= htmlspecialchars((string) ($_POST['bank_name'] ?? ($bankRow['bank_name'] ?? ''))) ?>">
+                        </div>
+                        <div class="field">
+                            <label for="routing_number">Routing number</label>
+                            <input type="text" id="routing_number" name="routing_number" required maxlength="20"
+                                   value="<?= htmlspecialchars((string) ($_POST['routing_number'] ?? ($bankRow['routing_number'] ?? ''))) ?>">
+                        </div>
+                    </div>
+                    <div class="field">
+                        <label for="account_number">Account number</label>
+                        <input type="text" id="account_number" name="account_number" required maxlength="20"
+                               value="<?= htmlspecialchars((string) ($_POST['account_number'] ?? ($bankRow['account_number'] ?? ''))) ?>">
+                    </div>
+                    <button type="submit" class="btn">Save bank info</button>
+                </form>
             </div>
         </div>
     </section>

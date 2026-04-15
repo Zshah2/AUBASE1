@@ -3,6 +3,7 @@ declare(strict_types=1);
 
 session_start();
 require_once __DIR__ . '/../backend/db.php';
+require_once __DIR__ . '/../backend/csrf.php';
 
 $logged_in        = isset($_SESSION['user_id'], $_SESSION['username']);
 $session_username = $logged_in ? (string) $_SESSION['username'] : '';
@@ -17,6 +18,9 @@ $errors  = [];
 $success = false;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!csrf_verify()) {
+        $errors[] = 'Invalid session. Please refresh the page and try again.';
+    }
     $name        = trim((string)($_POST['name']        ?? ''));
     $description = trim((string)($_POST['description'] ?? ''));
     $location    = trim((string)($_POST['location']    ?? ''));
@@ -25,6 +29,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $start_price = trim((string)($_POST['start_price'] ?? ''));
     $buy_price   = trim((string)($_POST['buy_price']   ?? ''));
     $duration    = (int)($_POST['duration'] ?? 7);
+
+    // Shipping options
+    $pickupEnabled = isset($_POST['ship_pickup']) && (string) $_POST['ship_pickup'] === '1';
+    $ship1_method  = trim((string) ($_POST['ship1_method'] ?? ''));
+    $ship1_price   = trim((string) ($_POST['ship1_price'] ?? ''));
+    $ship1_days    = trim((string) ($_POST['ship1_days'] ?? ''));
+    $ship2_method  = trim((string) ($_POST['ship2_method'] ?? ''));
+    $ship2_price   = trim((string) ($_POST['ship2_price'] ?? ''));
+    $ship2_days    = trim((string) ($_POST['ship2_days'] ?? ''));
 
     if (!$name)                           $errors[] = 'Item name is required.';
     if (!$description)                    $errors[] = 'Description is required.';
@@ -36,6 +49,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $errors[] = 'Buy It Now price must be greater than starting price.';
     if (!in_array($duration, [1,3,5,7,10,14], true))
         $errors[] = 'Invalid auction duration.';
+
+    // Seller must have bank info on file (spec requirement)
+    $bankChk = $conn->prepare('SELECT 1 FROM BankInfo WHERE seller_id = ? LIMIT 1');
+    $bankChk->bind_param('s', $session_user_id);
+    $bankChk->execute();
+    if ($bankChk->get_result()->num_rows === 0) {
+        $errors[] = 'Add your bank information in Account settings before listing an item.';
+    }
+
+    $shippingRows = [];
+    if ($pickupEnabled) {
+        $shippingRows[] = ['Pickup', 0.00, null, 1];
+    }
+    $addShip = function(string $m, string $p, string $d) use (&$shippingRows) {
+        if ($m === '' && $p === '' && $d === '') return;
+        $m = trim($m);
+        if ($m === '') return;
+        if (!is_numeric($p) || (float)$p < 0) return;
+        $days = ($d === '' ? null : (int)$d);
+        $shippingRows[] = [$m, (float)$p, $days, 0];
+    };
+    $addShip($ship1_method, $ship1_price, $ship1_days);
+    $addShip($ship2_method, $ship2_price, $ship2_days);
+    if (count($shippingRows) === 0) {
+        $errors[] = 'Add at least one shipping option (or enable pickup).';
+    }
 
     if (empty($errors)) {
         $conn->begin_transaction();
@@ -75,6 +114,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt4->bind_param('iddss', $item_id, $sp, $sp, $start_time, $end_time);
             }
             if (!$stmt4->execute()) throw new Exception($stmt4->error);
+            $auction_id = (int) $conn->insert_id;
+
+            // Insert ShippingOption rows for this auction
+            $shipStmt = $conn->prepare('INSERT INTO ShippingOption (auction_id, method, price, estimated_days, is_pickup) VALUES (?,?,?,?,?)');
+            if (!$shipStmt) throw new Exception($conn->error);
+            foreach ($shippingRows as $r) {
+                [$m, $p, $days, $pickup] = $r;
+                $daysVal = $days;
+                $shipStmt->bind_param('isdii', $auction_id, $m, $p, $daysVal, $pickup);
+                if (!$shipStmt->execute()) throw new Exception($shipStmt->error);
+            }
 
             $conn->commit();
             $success = true;
@@ -335,6 +385,7 @@ if ($cr) while ($r = $cr->fetch_assoc()) $cats[] = $r['name'];
 
         <div class="layout">
             <form method="POST" action="sell.php">
+                <?= csrf_field() ?>
 
                 <div class="form-card">
 
@@ -420,6 +471,55 @@ if ($cr) while ($r = $cr->fetch_assoc()) $cats[] = $r['name'];
                             <?php endforeach; ?>
                         </div>
                         <div class="field-hint" style="margin-top:10px">7-day auctions typically receive the most bids.</div>
+                    </div>
+
+                    <!-- Shipping -->
+                    <div class="form-section">
+                        <div class="form-section-title">Shipping options</div>
+                        <div class="field">
+                            <label>
+                                <input type="checkbox" name="ship_pickup" value="1" <?= isset($_POST['ship_pickup']) ? 'checked' : '' ?>>
+                                Enable local pickup <span class="opt">(free)</span>
+                            </label>
+                            <div class="field-hint">If enabled, buyers can choose pickup at no extra cost.</div>
+                        </div>
+
+                        <div class="field-row">
+                            <div class="field">
+                                <label>Shipping method #1 <span class="req">*</span></label>
+                                <input type="text" name="ship1_method" placeholder="e.g. Standard shipping" value="<?= htmlspecialchars($_POST['ship1_method'] ?? '') ?>" maxlength="100">
+                            </div>
+                            <div class="field">
+                                <label>Price <span class="req">*</span></label>
+                                <div class="input-prefix">
+                                    <span>$</span>
+                                    <input type="number" name="ship1_price" placeholder="0.00" min="0.00" step="0.01" value="<?= htmlspecialchars($_POST['ship1_price'] ?? '') ?>">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label>Estimated days <span class="opt">(optional)</span></label>
+                            <input type="number" name="ship1_days" placeholder="e.g. 5" min="1" step="1" value="<?= htmlspecialchars($_POST['ship1_days'] ?? '') ?>">
+                        </div>
+
+                        <div class="field-row" style="margin-top:10px">
+                            <div class="field">
+                                <label>Shipping method #2 <span class="opt">(optional)</span></label>
+                                <input type="text" name="ship2_method" placeholder="e.g. Express shipping" value="<?= htmlspecialchars($_POST['ship2_method'] ?? '') ?>" maxlength="100">
+                            </div>
+                            <div class="field">
+                                <label>Price <span class="opt">(optional)</span></label>
+                                <div class="input-prefix">
+                                    <span>$</span>
+                                    <input type="number" name="ship2_price" placeholder="0.00" min="0.00" step="0.01" value="<?= htmlspecialchars($_POST['ship2_price'] ?? '') ?>">
+                                </div>
+                            </div>
+                        </div>
+                        <div class="field">
+                            <label>Estimated days <span class="opt">(optional)</span></label>
+                            <input type="number" name="ship2_days" placeholder="e.g. 2" min="1" step="1" value="<?= htmlspecialchars($_POST['ship2_days'] ?? '') ?>">
+                        </div>
+                        <div class="field-hint">At least one shipping option (or pickup) is required.</div>
                     </div>
 
                     <!-- Footer -->

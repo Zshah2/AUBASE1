@@ -129,7 +129,6 @@ AuBase/
 | `AUBASE_DB_PORT` | Port (default `3306`) |
 | `AUBASE_DB_NAME` | Database name (default `aubase`) |
 | `AUBASE_DB_USER` / `AUBASE_DB_PASS` | Credentials |
-| `AUBASE_DEMO_NOW` | `YYYY-MM-DD` “today” for open/closed auctions when using the historical demo dataset (default `2001-12-14`) |
 | `AUBASE_IMPORT_KEY` | If non-empty, allows browser `import.php?key=…` (under `public/`); empty = CLI only |
 | `AUBASE_BASE_URL` | Used when sending mail links (verification / reset) |
 | `AUBASE_MAIL_FROM` | If set with working mail, enables **email verification** on register and supports **forgot password** |
@@ -144,6 +143,7 @@ Run from project root **after** `database/db.sql`, only when you need the featur
 
 | Script | What it adds |
 |--------|----------------|
+| `php database/migrate_schema_v2.php` | Align schema with final submission (AUTO_INCREMENT item IDs, unique username, CurrentTime seed) |
 | `php database/migrate_password_hash.php` | Safer password storage if you started from an older schema |
 | `php database/migrate_email_verify.php` | Columns + flow for email verification |
 | `php database/migrate_password_reset.php` | Reset token columns for forgot password |
@@ -151,11 +151,37 @@ Run from project root **after** `database/db.sql`, only when you need the featur
 
 ---
 
+## System time simulation (assignment requirement)
+
+Auction status (open/closed), countdowns, and “ship within two business days” checks use the **`CurrentTime` table**.
+
+- **View current time**:
+
+```sql
+SELECT system_time FROM CurrentTime WHERE id = 1;
+```
+
+- **Set current time** (advance auctions / simulate passage of time):
+
+```sql
+UPDATE CurrentTime SET system_time = '2001-12-15 12:00:00' WHERE id = 1;
+```
+
+The table is designed to contain a **single row** (id = 1).
+
+---
+
 ## Design notes for reviewers
 
-- **Demo time**: Auctions open/closed vs `AUBASE_DEMO_NOW`, not necessarily the machine clock—useful for a fixed academic or portfolio dataset.
+- **Time simulation**: The app uses `CurrentTime.system_time` (single-row table) as the AuctionBase “current time.”
 - **Images**: Listing thumbnails use [Picsum](https://picsum.photos) seeds from `item_id` for a consistent placeholder look without hosting uploads.
-- **Security**: Withdraw listing/bid and account POSTs use CSRF checks; passwords use PHP’s native hashing API.
+- **Security**: Sensitive actions use CSRF checks; passwords use PHP’s native hashing API.
+
+---
+
+## End-to-end flow (what graders can click through)
+
+- **Seller**: Account → add **Bank info** → Sell → add **Shipping options** → List item\n+- **Buyer**: Account → add **Credit card** → place bids / Buy It Now → after auction ends, winner uses **Checkout** → payment recorded\n+- **Seller**: Dashboard → **Orders to Ship** → enter tracking\n+- **Buyer**: Dashboard → **My Purchases** → confirm delivery → leave review\n 
 
 ---
 
