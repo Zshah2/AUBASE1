@@ -69,6 +69,7 @@ AuBase/
 │   └── import.php          # Demo JSON import (logic; CLI: php scripts/import.php)
 ├── data/
 │   └── ebay_data/          # Optional: items-0.json … (see import)
+├── dev.ps1                 # Optional: PowerShell helper to run php -S (see Local setup)
 ├── README.md
 └── .env.example
 ```
@@ -117,6 +118,8 @@ AuBase/
    php -S localhost:8080 -t public
    ```
 
+   **PowerShell (Windows, or `pwsh` on macOS/Linux):** from the repo root, `.\dev.ps1` (same default port; `-Port 3000`, `-UseRouter` for `router.php`).
+
 6. Open **http://localhost:8080** — the home page is `public/index.php`.
 
 ---
@@ -148,6 +151,7 @@ Run from project root **after** `database/db.sql`, only when you need the featur
 | `php database/migrate_email_verify.php` | Columns + flow for email verification |
 | `php database/migrate_password_reset.php` | Reset token columns for forgot password |
 | `php database/migrate_account_settings.php` | `User.created_at`, `User.deleted_at` for account page + soft delete |
+| `php database/migrate_order_ship_to.php` | `Order.ship_to_*` columns so checkout captures delivery address for sellers |
 
 ---
 

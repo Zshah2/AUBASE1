@@ -43,6 +43,15 @@ $winnerId = '';
 $isClosed = false;
 $shippingOptions = [];
 $cards = [];
+$shipForm = [
+    'ship_to_name' => '',
+    'ship_to_line1' => '',
+    'ship_to_line2' => '',
+    'ship_to_city' => '',
+    'ship_to_region' => '',
+    'ship_to_postal' => '',
+    'ship_to_country' => '',
+];
 
 if ($auction) {
     $isClosed = strtotime((string) $auction['end_time']) <= $nowTs;
@@ -63,6 +72,17 @@ if ($auction) {
         } elseif ($winnerId !== $userId) {
             $error = 'Only the winning bidder can check out this auction.';
         } else {
+            $uprof = $conn->prepare('SELECT first_name, last_name, address FROM User WHERE user_id = ? LIMIT 1');
+            $uprof->bind_param('s', $userId);
+            $uprof->execute();
+            $ur = $uprof->get_result()->fetch_assoc();
+            if ($ur) {
+                $fn = trim((string) ($ur['first_name'] ?? ''));
+                $ln = trim((string) ($ur['last_name'] ?? ''));
+                $shipForm['ship_to_name'] = trim($fn . ' ' . $ln);
+                $shipForm['ship_to_line1'] = trim((string) ($ur['address'] ?? ''));
+            }
+
             // Must have a valid card
             $cardStmt = $conn->prepare("SELECT card_id, card_number, expiration_date FROM CreditCard WHERE user_id = ? AND expiration_date >= CURDATE() ORDER BY card_id DESC LIMIT 5");
             $cardStmt->bind_param('s', $userId);
@@ -95,13 +115,23 @@ if ($auction) {
                 if (!csrf_verify()) {
                     $error = 'Invalid session. Please refresh and try again.';
                 } else {
+                    $shipForm = [
+                        'ship_to_name' => trim((string) ($_POST['ship_to_name'] ?? '')),
+                        'ship_to_line1' => trim((string) ($_POST['ship_to_line1'] ?? '')),
+                        'ship_to_line2' => trim((string) ($_POST['ship_to_line2'] ?? '')),
+                        'ship_to_city' => trim((string) ($_POST['ship_to_city'] ?? '')),
+                        'ship_to_region' => trim((string) ($_POST['ship_to_region'] ?? '')),
+                        'ship_to_postal' => trim((string) ($_POST['ship_to_postal'] ?? '')),
+                        'ship_to_country' => trim((string) ($_POST['ship_to_country'] ?? '')),
+                    ];
+
                     $shipId = (int) ($_POST['shipping_option_id'] ?? 0);
                     $cardId = (int) ($_POST['card_id'] ?? 0);
                     if ($shipId < 1 || $cardId < 1) {
                         $error = 'Please choose a shipping option and a card.';
                     } else {
                         // Validate ownership / association
-                        $s2 = $conn->prepare("SELECT price FROM ShippingOption WHERE shipping_option_id = ? AND auction_id = ? LIMIT 1");
+                        $s2 = $conn->prepare("SELECT price, is_pickup FROM ShippingOption WHERE shipping_option_id = ? AND auction_id = ? LIMIT 1");
                         $s2->bind_param('ii', $shipId, $aid);
                         $s2->execute();
                         $srow = $s2->get_result()->fetch_assoc();
@@ -116,23 +146,73 @@ if ($auction) {
                         } elseif (!$cardOk) {
                             $error = 'Invalid card selection.';
                         } else {
-                            $shippingCost = (float) $srow['price'];
-                            $conn->begin_transaction();
-                            try {
-                                $ins = $conn->prepare(
-                                    "INSERT INTO `Order` (auction_id, buyer_id, card_id, shipping_option_id, bid_amount, shipping_cost, payment_status, payment_time)
-                                     VALUES (?,?,?,?,?,?, 'paid', ?)"
-                                );
-                                $ins->bind_param('isiidds', $aid, $userId, $cardId, $shipId, $winningBid, $shippingCost, $nowSql);
-                                if (!$ins->execute()) {
-                                    throw new Exception($ins->error);
+                            $isPickup = (int) ($srow['is_pickup'] ?? 0) === 1;
+                            if (!$isPickup) {
+                                if ($shipForm['ship_to_name'] === '') {
+                                    $error = 'Enter the full name for the shipping label.';
+                                } elseif ($shipForm['ship_to_line1'] === '') {
+                                    $error = 'Enter a street address.';
+                                } elseif ($shipForm['ship_to_city'] === '') {
+                                    $error = 'Enter the city.';
+                                } elseif ($shipForm['ship_to_postal'] === '') {
+                                    $error = 'Enter the postal / ZIP code.';
+                                } elseif ($shipForm['ship_to_country'] === '') {
+                                    $error = 'Enter the country.';
+                                } elseif (mb_strlen($shipForm['ship_to_name']) > 150
+                                    || mb_strlen($shipForm['ship_to_line1']) > 255
+                                    || mb_strlen($shipForm['ship_to_line2']) > 255
+                                    || mb_strlen($shipForm['ship_to_city']) > 100
+                                    || mb_strlen($shipForm['ship_to_region']) > 100
+                                    || mb_strlen($shipForm['ship_to_postal']) > 32
+                                    || mb_strlen($shipForm['ship_to_country']) > 100) {
+                                    $error = 'One or more address fields are too long.';
                                 }
-                                $conn->commit();
-                                header('Location: dashboard.php?msg=order_paid');
-                                exit;
-                            } catch (Exception $e) {
-                                $conn->rollback();
-                                $error = 'Could not complete checkout.';
+                            }
+
+                            $shipName = $isPickup ? null : $shipForm['ship_to_name'];
+                            $shipL1 = $isPickup ? null : $shipForm['ship_to_line1'];
+                            $shipL2 = $isPickup || $shipForm['ship_to_line2'] === '' ? null : $shipForm['ship_to_line2'];
+                            $shipCity = $isPickup ? null : $shipForm['ship_to_city'];
+                            $shipReg = $isPickup || $shipForm['ship_to_region'] === '' ? null : $shipForm['ship_to_region'];
+                            $shipPostal = $isPickup ? null : $shipForm['ship_to_postal'];
+                            $shipCountry = $isPickup ? null : $shipForm['ship_to_country'];
+
+                            if ($error === '') {
+                                $shippingCost = (float) $srow['price'];
+                                $conn->begin_transaction();
+                                try {
+                                    $ins = $conn->prepare(
+                                        "INSERT INTO `Order` (auction_id, buyer_id, card_id, shipping_option_id, bid_amount, shipping_cost, payment_status, payment_time,
+                                         ship_to_name, ship_to_line1, ship_to_line2, ship_to_city, ship_to_region, ship_to_postal, ship_to_country)
+                                         VALUES (?,?,?,?,?,?, 'paid', ?,?,?,?,?,?,?,?)"
+                                    );
+                                    $ins->bind_param(
+                                        'isiiddssssssss',
+                                        $aid,
+                                        $userId,
+                                        $cardId,
+                                        $shipId,
+                                        $winningBid,
+                                        $shippingCost,
+                                        $nowSql,
+                                        $shipName,
+                                        $shipL1,
+                                        $shipL2,
+                                        $shipCity,
+                                        $shipReg,
+                                        $shipPostal,
+                                        $shipCountry
+                                    );
+                                    if (!$ins->execute()) {
+                                        throw new Exception($ins->error);
+                                    }
+                                    $conn->commit();
+                                    header('Location: dashboard.php?msg=order_paid');
+                                    exit;
+                                } catch (Exception $e) {
+                                    $conn->rollback();
+                                    $error = 'Could not complete checkout.';
+                                }
                             }
                         }
                     }
@@ -173,7 +253,11 @@ function cc_last4_local(string $num): string {
         .err{background:var(--redbg);color:var(--red);border:1px solid #fecaca}
         .ok{background:var(--greenbg);color:var(--green);border:1px solid #a7f3d0}
         label{display:block;font-size:12.5px;font-weight:600;margin:12px 0 6px}
-        select{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff}
+        select,input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#fff;font-family:inherit;font-size:14px}
+        input[type=text]:focus{outline:2px solid rgba(2,132,199,0.35);border-color:var(--navy2)}
+        .ship-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+        @media(max-width:560px){.ship-grid{grid-template-columns:1fr}}
+        .ship-note{font-size:12.5px;color:var(--muted);margin:0 0 10px;line-height:1.45}
         .btn{display:inline-flex;align-items:center;justify-content:center;width:100%;margin-top:14px;padding:12px 14px;border:none;border-radius:999px;background:linear-gradient(135deg,var(--navy) 0%,var(--navy2) 100%);color:#fff;font-weight:700;cursor:pointer}
         .totals{display:flex;justify-content:space-between;margin:8px 0;color:var(--mid)}
         .totals strong{color:var(--ink)}
@@ -217,12 +301,44 @@ function cc_last4_local(string $num): string {
                         <select id="shipping_option_id" name="shipping_option_id" required>
                             <option value="">Select…</option>
                             <?php foreach ($shippingOptions as $s): ?>
-                                <option value="<?= (int) $s['shipping_option_id'] ?>">
+                                <option value="<?= (int) $s['shipping_option_id'] ?>" data-pickup="<?= (int) $s['is_pickup'] === 1 ? '1' : '0' ?>">
                                     <?= htmlspecialchars((string) $s['method']) ?> — $<?= number_format((float) $s['price'], 2) ?>
                                     <?= ((int) $s['is_pickup'] === 1) ? '(Pickup)' : '' ?>
                                 </option>
                             <?php endforeach; ?>
                         </select>
+
+                        <p class="ship-note" id="ship-hint">If the seller ships the item, enter the address where you want it delivered. For local pickup, these fields are optional.</p>
+                        <div class="ship-grid" id="ship-fields">
+                            <div style="grid-column:1/-1">
+                                <label for="ship_to_name">Full name (shipping label)</label>
+                                <input type="text" id="ship_to_name" name="ship_to_name" maxlength="150" value="<?= htmlspecialchars($shipForm['ship_to_name']) ?>" autocomplete="name">
+                            </div>
+                            <div style="grid-column:1/-1">
+                                <label for="ship_to_line1">Street address</label>
+                                <input type="text" id="ship_to_line1" name="ship_to_line1" maxlength="255" value="<?= htmlspecialchars($shipForm['ship_to_line1']) ?>" autocomplete="address-line1">
+                            </div>
+                            <div style="grid-column:1/-1">
+                                <label for="ship_to_line2">Apt / suite <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+                                <input type="text" id="ship_to_line2" name="ship_to_line2" maxlength="255" value="<?= htmlspecialchars($shipForm['ship_to_line2']) ?>" autocomplete="address-line2">
+                            </div>
+                            <div>
+                                <label for="ship_to_city">City</label>
+                                <input type="text" id="ship_to_city" name="ship_to_city" maxlength="100" value="<?= htmlspecialchars($shipForm['ship_to_city']) ?>" autocomplete="address-level2">
+                            </div>
+                            <div>
+                                <label for="ship_to_region">State / province <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+                                <input type="text" id="ship_to_region" name="ship_to_region" maxlength="100" value="<?= htmlspecialchars($shipForm['ship_to_region']) ?>" autocomplete="address-level1">
+                            </div>
+                            <div>
+                                <label for="ship_to_postal">Postal / ZIP</label>
+                                <input type="text" id="ship_to_postal" name="ship_to_postal" maxlength="32" value="<?= htmlspecialchars($shipForm['ship_to_postal']) ?>" autocomplete="postal-code">
+                            </div>
+                            <div>
+                                <label for="ship_to_country">Country</label>
+                                <input type="text" id="ship_to_country" name="ship_to_country" maxlength="100" value="<?= htmlspecialchars($shipForm['ship_to_country']) ?>" autocomplete="country-name">
+                            </div>
+                        </div>
 
                         <label for="card_id">Card</label>
                         <select id="card_id" name="card_id" required>
@@ -235,6 +351,34 @@ function cc_last4_local(string $num): string {
                         <button class="btn" type="submit">Pay now (simulated)</button>
                         <p class="sub" style="margin:12px 0 0">After payment, the seller must ship within two business days. You’ll confirm delivery in your dashboard.</p>
                     </form>
+                    <script>
+                    (function(){
+                        var sel=document.getElementById('shipping_option_id');
+                        var hint=document.getElementById('ship-hint');
+                        var grid=document.getElementById('ship-fields');
+                        if(!sel||!hint||!grid)return;
+                        function upd(){
+                            var opt=sel.options[sel.selectedIndex];
+                            if(!opt||!opt.value){
+                                hint.textContent='Choose a shipping option, then fill the address if the seller ships to you.';
+                                grid.querySelectorAll('input').forEach(function(inp){ inp.removeAttribute('required'); });
+                                return;
+                            }
+                            var pu=opt.getAttribute('data-pickup')==='1';
+                            hint.textContent=pu
+                                ? 'Local pickup: address fields are optional. Coordinate pickup with the seller if needed.'
+                                : 'Enter the full delivery address. The seller uses this to ship your item.';
+                            grid.querySelectorAll('input').forEach(function(inp){
+                                if(pu){inp.removeAttribute('required');return;}
+                                var id=inp.id;
+                                if(id==='ship_to_line2'||id==='ship_to_region')return;
+                                inp.setAttribute('required','required');
+                            });
+                        }
+                        sel.addEventListener('change',upd);
+                        upd();
+                    })();
+                    </script>
                 <?php endif; ?>
             </div>
         </div>

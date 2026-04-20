@@ -133,19 +133,28 @@ $my_listings = $conn->query("
 
 $my_purchases = $conn->query("
     SELECT o.order_id, o.payment_status, o.payment_time, o.tracking_number, o.delivery_confirmed,
-           i.item_id, i.name, a.current_price
+           o.ship_to_name, o.ship_to_line1, o.ship_to_line2, o.ship_to_city, o.ship_to_region, o.ship_to_postal, o.ship_to_country,
+           i.item_id, i.name, a.current_price,
+           so.is_pickup, so.method AS ship_method
     FROM `Order` o
     JOIN Auction a ON o.auction_id = a.auction_id
     JOIN Item i ON a.item_id = i.item_id
+    JOIN ShippingOption so ON o.shipping_option_id = so.shipping_option_id
     WHERE o.buyer_id = '$uid_esc'
     ORDER BY o.order_id DESC LIMIT 25
 ");
 
 $to_ship = $conn->query("
-    SELECT o.order_id, o.payment_time, o.tracking_number, i.item_id, i.name, a.current_price
+    SELECT o.order_id, o.payment_time, o.tracking_number,
+           o.ship_to_name, o.ship_to_line1, o.ship_to_line2, o.ship_to_city, o.ship_to_region, o.ship_to_postal, o.ship_to_country,
+           i.item_id, i.name, a.current_price,
+           so.method AS ship_method, so.is_pickup,
+           u.username AS buyer_username
     FROM `Order` o
     JOIN Auction a ON o.auction_id = a.auction_id
     JOIN Item i ON a.item_id = i.item_id
+    JOIN ShippingOption so ON o.shipping_option_id = so.shipping_option_id
+    JOIN User u ON o.buyer_id = u.user_id
     WHERE i.seller_id = '$uid_esc' AND o.payment_status = 'paid'
     ORDER BY o.order_id DESC LIMIT 25
 ");
@@ -218,6 +227,8 @@ $to_ship = $conn->query("
         .row-name{font-size:13px;font-weight:600;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:2px;display:block}
         .row-hit:hover .row-name,.row-hit:focus-visible .row-name{color:var(--navy)}
         .row-meta{display:block;font-size:11px;color:var(--muted);line-height:1.45}
+        .ship-addr{display:block;margin-top:8px;padding:10px 12px;background:var(--bg-2);border:1px solid var(--border);border-radius:var(--radius-sm);font-size:12.5px;color:var(--ink-3);line-height:1.5}
+        .ship-addr strong{color:var(--ink);font-weight:600}
         .row-right{text-align:right;flex-shrink:0;flex-direction:column;display:flex;align-items:flex-end;justify-content:center;gap:2px;margin-right:8px}
         .row-price{font-size:13.5px;font-weight:700;color:var(--navy);font-family:'DM Serif Display',serif;letter-spacing:-0.3px}
         .row-sub{font-size:10px;color:var(--muted)}
@@ -369,6 +380,39 @@ $to_ship = $conn->query("
                                         <span style="color:var(--muted)">Paid · Awaiting shipment</span>
                                     <?php endif; ?>
                                 </span>
+                                <?php
+                                $pIsPickup = (int) ($p['is_pickup'] ?? 0) === 1;
+                                $pMethod = htmlspecialchars((string) ($p['ship_method'] ?? ''));
+                                if ($pIsPickup): ?>
+                                    <span class="ship-addr"><strong>Pickup</strong> — <?= $pMethod !== '' ? $pMethod : 'Local pickup' ?>. Coordinate with the seller for handoff.</span>
+                                <?php else:
+                                    $plines = [];
+                                    if (trim((string) ($p['ship_to_name'] ?? '')) !== '') {
+                                        $plines[] = trim((string) $p['ship_to_name']);
+                                    }
+                                    if (trim((string) ($p['ship_to_line1'] ?? '')) !== '') {
+                                        $plines[] = trim((string) $p['ship_to_line1']);
+                                    }
+                                    if (trim((string) ($p['ship_to_line2'] ?? '')) !== '') {
+                                        $plines[] = trim((string) $p['ship_to_line2']);
+                                    }
+                                    $cityBits = array_filter([
+                                        trim((string) ($p['ship_to_city'] ?? '')),
+                                        trim((string) ($p['ship_to_region'] ?? '')),
+                                        trim((string) ($p['ship_to_postal'] ?? '')),
+                                    ], static fn ($x) => $x !== '');
+                                    if ($cityBits !== []) {
+                                        $plines[] = implode(', ', $cityBits);
+                                    }
+                                    if (trim((string) ($p['ship_to_country'] ?? '')) !== '') {
+                                        $plines[] = trim((string) $p['ship_to_country']);
+                                    }
+                                    if ($plines !== []): ?>
+                                        <span class="ship-addr"><strong>Ship to</strong><br><?= nl2br(htmlspecialchars(implode("\n", $plines))) ?></span>
+                                    <?php else: ?>
+                                        <span class="ship-addr"><strong>Ship to</strong> — address was not stored (older order or DB not migrated).</span>
+                                    <?php endif; ?>
+                                <?php endif; ?>
                             </span>
                             <span class="row-right">
                                 <span class="row-price"><?= $price ?></span>
@@ -431,6 +475,40 @@ $to_ship = $conn->query("
                                         </span>
                                     <?php endif; ?>
                                 </span>
+                                <?php
+                                $oIsPickup = (int) ($o['is_pickup'] ?? 0) === 1;
+                                $oMethod = htmlspecialchars((string) ($o['ship_method'] ?? ''));
+                                $buyerU = htmlspecialchars((string) ($o['buyer_username'] ?? ''));
+                                if ($oIsPickup): ?>
+                                    <span class="ship-addr"><strong>Pickup</strong> — <?= $oMethod !== '' ? $oMethod : 'Local pickup' ?>. Buyer: <strong>@<?= $buyerU ?></strong></span>
+                                <?php else:
+                                    $slines = [];
+                                    if (trim((string) ($o['ship_to_name'] ?? '')) !== '') {
+                                        $slines[] = trim((string) $o['ship_to_name']);
+                                    }
+                                    if (trim((string) ($o['ship_to_line1'] ?? '')) !== '') {
+                                        $slines[] = trim((string) $o['ship_to_line1']);
+                                    }
+                                    if (trim((string) ($o['ship_to_line2'] ?? '')) !== '') {
+                                        $slines[] = trim((string) $o['ship_to_line2']);
+                                    }
+                                    $ocity = array_filter([
+                                        trim((string) ($o['ship_to_city'] ?? '')),
+                                        trim((string) ($o['ship_to_region'] ?? '')),
+                                        trim((string) ($o['ship_to_postal'] ?? '')),
+                                    ], static fn ($x) => $x !== '');
+                                    if ($ocity !== []) {
+                                        $slines[] = implode(', ', $ocity);
+                                    }
+                                    if (trim((string) ($o['ship_to_country'] ?? '')) !== '') {
+                                        $slines[] = trim((string) $o['ship_to_country']);
+                                    }
+                                    if ($slines !== []): ?>
+                                        <span class="ship-addr"><strong>Ship to this address</strong><br><?= nl2br(htmlspecialchars(implode("\n", $slines))) ?><br><span style="font-size:11px;color:var(--muted)">Buyer @<?= $buyerU ?></span></span>
+                                    <?php else: ?>
+                                        <span class="ship-addr"><strong>Ship to</strong> — no address on file for this order. Buyer: <strong>@<?= $buyerU ?></strong></span>
+                                    <?php endif; ?>
+                                <?php endif; ?>
                             </span>
                             <span class="row-right">
                                 <span class="row-price"><?= $price ?></span>
